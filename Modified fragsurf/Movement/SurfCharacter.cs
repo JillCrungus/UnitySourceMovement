@@ -16,6 +16,8 @@ namespace Fragsurf.Movement {
             Box
         }
 
+		CountdownTimer stepTimer;
+
         ///// Fields /////
 
         [Header("Physics Settings")]
@@ -38,6 +40,11 @@ namespace Fragsurf.Movement {
         [Header ("Features")]
         public bool crouchingEnabled = true;
         public bool slidingEnabled = false;
+		public bool stepSoundsEnabled = true;
+
+		[Header( "Step sounds setup" )]
+		public float baseStepTime = 0.6f;
+		public AudioClip[] stepSounds;
 
         [Header ("Step offset (can be buggy, enable at your own risk)")]
         public bool useStepOffset = false;
@@ -65,6 +72,8 @@ namespace Fragsurf.Movement {
         private int numberOfTriggers = 0;
 
         private bool underwater = false;
+
+		private AudioSource chrSounds;
 
         ///// Properties /////
 
@@ -132,6 +141,10 @@ namespace Fragsurf.Movement {
             _cameraWaterCheckRb.isKinematic = true;
 
             _cameraWaterCheck = _cameraWaterCheckObject.AddComponent<CameraWaterCheck> ();
+
+			chrSounds = GetComponent<AudioSource>();
+
+			stepTimer = new CountdownTimer();
 
             prevPosition = transform.position;
 
@@ -212,7 +225,7 @@ namespace Fragsurf.Movement {
 
         }
 
-        private void Update () {
+		private void Update () {
 
             _colliderObject.transform.rotation = Quaternion.identity;
 
@@ -257,7 +270,70 @@ namespace Fragsurf.Movement {
 
             _colliderObject.transform.rotation = Quaternion.identity;
 
+			UpdateStepSounds();
         }
+
+		private bool ShouldPlayStepSound()
+		{
+			return stepTimer.HasStarted()
+					&& stepTimer.IsElapsed()
+					&& _moveData.velocity != Vector3.zero
+					&& chrSounds != null
+					&& stepSounds.Length > 0
+					&& stepSoundsEnabled
+					&& groundObject != null;
+
+		}
+
+		private void UpdateStepSounds()
+		{
+			/*
+			Debug.Log( $"[Step Conditions] stepTimer.HasStarted(): {stepTimer.HasStarted()}" );
+			Debug.Log( $"[Step Conditions] stepTimer.IsElapsed(): {stepTimer.IsElapsed()}" );
+			Debug.Log( $"[Step Conditions] _moveData.velocity != Vector3.zero: {_moveData.velocity != Vector3.zero}" );
+			Debug.Log( $"[Step Conditions] chrSounds != null: {chrSounds != null}" );
+			Debug.Log( $"[Step Conditions] stepSounds.Length > 0: {stepSounds.Length > 0}" );
+			Debug.Log( $"[Step Conditions] stepSoundsEnabled: {stepSoundsEnabled}" );
+			Debug.Log( $"[Step Conditions] _moveData.grounded: {_moveData.grounded}" );
+			*/
+
+			if ( ShouldPlayStepSound() )
+			{
+				PlayStepSound();
+
+				ResetStepSoundTimer();
+			}
+			else if ( !stepTimer.HasStarted() )
+			{
+				ResetStepSoundTimer();
+			}
+		}
+
+		private void ResetStepSoundTimer()
+		{
+			bool crouching = _moveData.crouching;
+			bool sprinting = _moveData.sprinting;
+
+			float baseSpeed = movementConfig.walkSpeed;
+			float sprintSpeed = movementConfig.sprintSpeed;
+			float crouchSpeed = movementConfig.crouchSpeed;
+
+			float sprintFactor = Mathf.Min( baseSpeed / sprintSpeed, sprintSpeed / baseSpeed );
+			float crouchFactor = Mathf.Max( baseSpeed / crouchSpeed, crouchSpeed / baseSpeed );
+
+			float stepTime = baseStepTime;
+			if ( crouching )
+				stepTime *= crouchFactor;
+			else if ( sprinting )
+				stepTime *= sprintFactor;
+
+			stepTimer.Start( stepTime );
+		}
+
+		private void PlayStepSound()
+		{
+			chrSounds.PlayOneShot( stepSounds[ Random.Range( 0, stepSounds.Length-1 ) ] );
+		}
         
         private void UpdateTestBinds () {
 
