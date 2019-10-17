@@ -137,6 +137,9 @@ MonoBehaviour:
   crouchingSpeed: 10
   crouchingEnabled: 1
   slidingEnabled: 0
+  stepSoundsEnabled: 1
+  baseStepTime: 0.5
+  stepSounds: []
   useStepOffset: 0
   stepOffset: 0.35
   movementConfig:

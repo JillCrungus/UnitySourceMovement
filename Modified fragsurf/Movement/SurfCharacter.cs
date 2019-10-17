@@ -16,6 +16,8 @@ namespace Fragsurf.Movement {
             Box
         }
 
+		CountdownTimer stepTimer;
+
         ///// Fields /////
 
         [Header("Physics Settings")]
@@ -38,10 +40,23 @@ namespace Fragsurf.Movement {
         [Header ("Features")]
         public bool crouchingEnabled = true;
         public bool slidingEnabled = false;
+		public bool stepSoundsEnabled = true;
+
 		[Header("Features [Experimental]")]
 		public bool moveWithGround = false; //Parents player to the ground object, allowing them to move with surfaces as they would in Source
-       
-		[Header ("Step offset (can be buggy, enable at your own risk)")]
+		public bool pickupObjects = false; //Allows pickup of objects
+		public bool applyDownforce = false; //Apply downforce to objects we stand on to simulate weighing them down
+
+		[Header( "Pickup" )]
+		public float pickupDistance = 2.0f;
+		public float pickupForce = 2.0f;
+		public Transform heldObjectPos = null;
+
+		[Header( "Step sounds setup" )]
+		public float baseStepTime = 0.6f;
+		public AudioClip[] stepSounds;
+
+        [Header ("Step offset (can be buggy, enable at your own risk)")]
         public bool useStepOffset = false;
         public float stepOffset = 0.35f;
 
@@ -68,9 +83,15 @@ namespace Fragsurf.Movement {
 
         private bool underwater = false;
 
-        ///// Properties /////
+		private AudioSource chrSounds;
 
-        public MoveType moveType { get { return MoveType.Walk; } }
+		private GameObject _heldObject;
+
+		private UnityEngine.Animations.PositionConstraint heldObjectConstraint;
+
+		///// Properties /////
+
+		public MoveType moveType { get { return MoveType.Walk; } }
         public MovementConfig moveConfig { get { return movementConfig; } }
         public MoveData moveData { get { return _moveData; } }
         public new Collider collider { get { return _collider; } }
@@ -82,6 +103,18 @@ namespace Fragsurf.Movement {
 
         }
 
+		public GameObject heldObject
+		{
+			get
+			{
+				return _heldObject;
+			}
+			set
+			{
+				_heldObject = value;
+			}
+		}
+
         public Vector3 baseVelocity { get { return _baseVelocity; } }
 
         public Vector3 forward { get { return viewTransform.forward; } }
@@ -90,14 +123,17 @@ namespace Fragsurf.Movement {
 
         Vector3 prevPosition;
 
-        ///// Methods /////
+		///// Methods /////
 
 		private void OnDrawGizmos()
 		{
 			Gizmos.color = Color.red;
 			Gizmos.DrawWireCube( transform.position, colliderSize );
+
+			Gizmos.DrawLine( viewTransform.position, viewTransform.position + ( viewTransform.forward * pickupDistance ) );
 		}
-		        private void Awake () {
+
+		private void Awake () {
             
             _controller.playerTransform = playerRotationTransform;
             
@@ -134,7 +170,12 @@ namespace Fragsurf.Movement {
 
             _cameraWaterCheck = _cameraWaterCheckObject.AddComponent<CameraWaterCheck> ();
 
-            prevPosition = transform.position;
+			chrSounds = GetComponent<AudioSource>();
+
+			stepTimer = new CountdownTimer();
+
+
+			prevPosition = transform.position;
 
             if (viewTransform == null)
                 viewTransform = Camera.main.transform;
@@ -215,27 +256,7 @@ namespace Fragsurf.Movement {
 
 		private void Update () {
 
-			if ( moveWithGround )
-			{
-				if ( groundObject )
-				{
-					transform.parent = groundObject.transform;
-				}
-				else
-				{
-					transform.parent = null;
-				}
-
-				//HACKHACK: we don't want the player to rotate on these. Is there a better way to do this?
-				Quaternion temp = transform.rotation;
-				temp.x = 0;
-				temp.z = 0;
-
-				transform.rotation = temp;
-			}
-
-            _colliderObject.transform.rotation = Quaternion.identity;
-
+			_colliderObject.transform.rotation = Quaternion.identity;
 
             //UpdateTestBinds ();
             UpdateMoveData ();
@@ -272,13 +293,182 @@ namespace Fragsurf.Movement {
 
             _controller.ProcessMovement (this, movementConfig, Time.deltaTime);
 
-            transform.position = moveData.origin;
+			if ( applyDownforce )
+			{
+				if ( groundObject )
+				{
+					Rigidbody rb = groundObject.GetComponent<Rigidbody>();
+					if ( rb )
+					{
+						float downForce = _moveData.gravityFactor * weight;
+
+						rb.AddForceAtPosition( new Vector3( 0, -downForce, 0 ), transform.position );
+					}
+				}
+			}
+
+			if ( moveWithGround )
+			{
+				if ( groundObject )
+				{
+					Rigidbody rb = groundObject.GetComponent<Rigidbody>();
+					if ( rb )
+					{
+						float downForce = _moveData.gravityFactor * weight;
+
+						rb.AddForceAtPosition( new Vector3( 0, -downForce, 0 ), transform.position );
+						_moveData.velocity += rb.velocity;
+					}
+				}
+			}
+
+			if (pickupObjects)
+				Pickup();
+
+			transform.position = moveData.origin;
             prevPosition = transform.position;
 
             _colliderObject.transform.rotation = Quaternion.identity;
 
+			UpdateStepSounds();
         }
 
+		private void Pickup()
+		{
+			heldObjectPos.position = viewTransform.position + ( viewTransform.forward * pickupDistance );
+
+			if ( Input.GetButtonDown( "Use" )  && !heldObject )
+			{
+				//viewTransform.position, viewTransform.position + ( viewTransform.forward * pickupDistance )
+				//TraceUtil.Trace tr = TraceUtil.Tracer.TraceBox( viewTransform.position,
+				//												viewTransform.position + ( viewTransform.forward * pickupDistance ),
+				//												new Vector3( 1f, 1f, 1f ),
+				//												1.0f,
+				//												0 );
+
+				RaycastHit tr;
+				Physics.Raycast( viewTransform.position, viewTransform.forward, out tr, pickupDistance );
+
+				//Debug.DrawLine( tr.startPos, tr.hitPoint, Color.red, 2.0f, false );
+
+				if ( tr.collider )
+				{
+					Debug.Log( $"Hit {tr.collider.gameObject.name}" );
+					Rigidbody rb = tr.collider.GetComponent<Rigidbody>();
+					if ( rb )
+					{
+						if ( rb.mass < 20 )
+						{
+							heldObject = rb.gameObject;
+							heldObjectConstraint = heldObject.AddComponent<UnityEngine.Animations.PositionConstraint>();
+							heldObjectConstraint.locked = false;
+							UnityEngine.Animations.ConstraintSource src = new UnityEngine.Animations.ConstraintSource();
+							src.sourceTransform = heldObjectPos;
+							src.weight = 1F;
+							heldObjectConstraint.AddSource( src );
+							heldObjectConstraint.constraintActive = true;
+						}
+					}
+				}
+			}
+			else if ( Input.GetButtonDown( "Use" ) && heldObject )
+			{
+				Destroy( heldObjectConstraint );
+				heldObject = null;
+			}
+			else if ( heldObject )
+			{
+
+				Vector3 targetPos = viewTransform.position + ( viewTransform.forward * pickupDistance );
+				Vector3 currentPos = heldObject.transform.position;
+
+				Rigidbody rb = heldObject.GetComponent<Rigidbody>();
+				
+				Vector3 diff = targetPos-currentPos;
+				
+				Vector3 force = diff*pickupForce*diff.magnitude;
+
+				if ( diff.magnitude > 0.1f )
+				{
+					//rb.AddForce( force, ForceMode.Impulse );
+				}
+
+				Vector3 currentRot = heldObject.transform.eulerAngles;
+
+				Transform temp = heldObject.transform;
+				temp.LookAt( viewTransform );
+
+				Vector3 targetRot = new Vector3( currentRot.x, temp.eulerAngles.y, currentRot.z );
+
+				Vector3 rotDiff = targetRot - currentRot;
+
+				Vector3 rotForce = rotDiff*pickupForce;
+
+				rb.AddTorque( rotForce );
+			}
+		}
+
+		private bool ShouldPlayStepSound()
+		{
+			return stepTimer.HasStarted()
+					&& stepTimer.IsElapsed()
+					&& _moveData.velocity != Vector3.zero
+					&& chrSounds != null
+					&& stepSounds.Length > 0
+					&& stepSoundsEnabled
+					&& groundObject != null;
+
+		}
+
+		private void UpdateStepSounds()
+		{
+			/*
+			Debug.Log( $"[Step Conditions] stepTimer.HasStarted(): {stepTimer.HasStarted()}" );
+			Debug.Log( $"[Step Conditions] stepTimer.IsElapsed(): {stepTimer.IsElapsed()}" );
+			Debug.Log( $"[Step Conditions] _moveData.velocity != Vector3.zero: {_moveData.velocity != Vector3.zero}" );
+			Debug.Log( $"[Step Conditions] chrSounds != null: {chrSounds != null}" );
+			Debug.Log( $"[Step Conditions] stepSounds.Length > 0: {stepSounds.Length > 0}" );
+			Debug.Log( $"[Step Conditions] stepSoundsEnabled: {stepSoundsEnabled}" );
+			Debug.Log( $"[Step Conditions] _moveData.grounded: {_moveData.grounded}" );
+			*/
+
+			if ( ShouldPlayStepSound() )
+			{
+				PlayStepSound();
+
+				ResetStepSoundTimer();
+			}
+			else if ( !stepTimer.HasStarted() )
+			{
+				ResetStepSoundTimer();
+			}
+		}
+
+		private void ResetStepSoundTimer()
+		{
+			bool crouching = _moveData.crouching;
+			bool sprinting = _moveData.sprinting;
+
+			float baseSpeed = movementConfig.walkSpeed;
+			float sprintSpeed = movementConfig.sprintSpeed;
+			float crouchSpeed = movementConfig.crouchSpeed;
+
+			float sprintFactor = Mathf.Min( baseSpeed / sprintSpeed, sprintSpeed / baseSpeed );
+			float crouchFactor = Mathf.Max( baseSpeed / crouchSpeed, crouchSpeed / baseSpeed );
+
+			float stepTime = baseStepTime;
+			if ( crouching )
+				stepTime *= crouchFactor;
+			else if ( sprinting )
+				stepTime *= sprintFactor;
+
+			stepTimer.Start( stepTime );
+		}
+
+		private void PlayStepSound()
+		{
+			chrSounds.PlayOneShot( stepSounds[ Random.Range( 0, stepSounds.Length-1 ) ] );
+		}
         
         private void UpdateTestBinds () {
 
