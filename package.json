@@ -1,0 +1,17 @@
+{
+  "name": "com.jill.sourcemovement",
+  "version": "1.0.0",
+  "displayName": "Source Movement",
+  "description": "Source Engine style movement for Unity",
+  "unity": "2019.1",
+  "unityRelease": "0b5",
+ "keywords": [
+    "source",
+	"player controller"
+  ],
+  "author": {
+    "name": "Jill Nesbit",
+    "email": "scrunguscrungus@gmail.com",
+    "url": "https://www.scrungus.club"
+  }
+}
