@@ -38,6 +38,9 @@ namespace Fragsurf.Movement {
         [Header ("Features")]
         public bool crouchingEnabled = true;
         public bool slidingEnabled = false;
+        public bool laddersEnabled = true;
+        public bool supportAngledLadders = true;
+        
 		[Header("Features [Experimental]")]
 		public bool moveWithGround = false; //Parents player to the ground object, allowing them to move with surfaces as they would in Source
        
@@ -195,6 +198,8 @@ namespace Fragsurf.Movement {
             _moveData.rigidbodyPushForce = rigidbodyPushForce;
 
             _moveData.slidingEnabled = slidingEnabled;
+            _moveData.laddersEnabled = laddersEnabled;
+            _moveData.angledLaddersEnabled = supportAngledLadders;
 
             _moveData.playerTransform = transform;
             _moveData.viewTransform = viewTransform;

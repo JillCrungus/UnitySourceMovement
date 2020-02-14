@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using Fragsurf.TraceUtil;
 
 namespace Fragsurf.Movement {
@@ -44,7 +44,18 @@ namespace Fragsurf.Movement {
             _config = config;
             _deltaTime = deltaTime;
             
-            if (!_surfer.moveData.underwater) {
+            if (_surfer.moveData.laddersEnabled && !_surfer.moveData.climbingLadder) {
+
+                // Look for ladders
+                LadderCheck (new Vector3(1f, 0.95f, 1f), _surfer.moveData.velocity * Mathf.Clamp (Time.deltaTime * 2f, 0.025f, 0.25f));
+
+            }
+            
+            if (_surfer.moveData.laddersEnabled && _surfer.moveData.climbingLadder) {
+                
+                LadderPhysics ();
+                
+            } else if (!_surfer.moveData.underwater) {
 
                 if (_surfer.moveData.velocity.y <= 0f)
                     jumping = false;
@@ -74,22 +85,30 @@ namespace Fragsurf.Movement {
             speed =  _surfer.moveData.velocity.magnitude;
             _surfer.moveData.velocity.y = yVel;
             
-            float maxDistPerFrame = 0.05f;
-            Vector3 velocityThisFrame = _surfer.moveData.velocity * _deltaTime;
-            float velocityDist = velocityThisFrame.magnitude;
-            float velocityDistLeft = velocityDist;
-            float initialVel = velocityDistLeft;
-            while (velocityDistLeft > 0f) {
+            if (_surfer.moveData.velocity.sqrMagnitude == 0f) {
 
-                float amountThisLoop = Mathf.Min (maxDistPerFrame, velocityDistLeft);
-                velocityDistLeft -= amountThisLoop;
+                // Do collisions while standing still
+                SurfPhysics.ResolveCollisions (_surfer.collider, ref _surfer.moveData.origin, ref _surfer.moveData.velocity, _surfer.moveData.rigidbodyPushForce, 1f, _surfer.moveData.stepOffset, _surfer);
 
-                // increment origin
-                Vector3 velThisLoop = velocityThisFrame * (amountThisLoop / initialVel);
-                _surfer.moveData.origin += velThisLoop;
+            } else {
 
-                // don't penetrate walls
-                SurfPhysics.ResolveCollisions (_surfer.collider, ref _surfer.moveData.origin, ref _surfer.moveData.velocity, _surfer.moveData.rigidbodyPushForce, amountThisLoop / velocityDist, _surfer.moveData.useStepOffset ? _surfer.moveData.stepOffset : 0f, _surfer);
+                float maxDistPerFrame = 0.2f;
+                Vector3 velocityThisFrame = _surfer.moveData.velocity * _deltaTime;
+                float velocityDistLeft = velocityThisFrame.magnitude;
+                float initialVel = velocityDistLeft;
+                while (velocityDistLeft > 0f) {
+
+                    float amountThisLoop = Mathf.Min (maxDistPerFrame, velocityDistLeft);
+                    velocityDistLeft -= amountThisLoop;
+
+                    // increment origin
+                    Vector3 velThisLoop = velocityThisFrame * (amountThisLoop / initialVel);
+                    _surfer.moveData.origin += velThisLoop;
+
+                    // don't penetrate walls
+                    SurfPhysics.ResolveCollisions (_surfer.collider, ref _surfer.moveData.origin, ref _surfer.moveData.velocity, _surfer.moveData.rigidbodyPushForce, amountThisLoop / initialVel, _surfer.moveData.stepOffset, _surfer);
+
+                }
 
             }
 
@@ -283,7 +302,102 @@ namespace Fragsurf.Movement {
                 _surfer.moveData.velocity.y = Mathf.Max (_surfer.moveData.velocity.y, _config.jumpForce);
 
         }
+        
+        private void LadderCheck (Vector3 colliderScale, Vector3 direction) {
 
+            if (_surfer.moveData.velocity.sqrMagnitude <= 0f)
+                return;
+            
+            bool foundLadder = false;
+
+            RaycastHit [] hits = Physics.BoxCastAll (_surfer.moveData.origin, Vector3.Scale (_surfer.collider.bounds.size * 0.5f, colliderScale), Vector3.Scale (direction, new Vector3 (1f, 0f, 1f)), Quaternion.identity, direction.magnitude, SurfPhysics.groundLayerMask, QueryTriggerInteraction.Collide);
+            foreach (RaycastHit hit in hits) {
+
+                Ladder ladder = hit.transform.GetComponentInParent<Ladder> ();
+                if (ladder != null) {
+
+                    bool allowClimb = true;
+                    float ladderAngle = Vector3.Angle (Vector3.up, hit.normal);
+                    if (_surfer.moveData.angledLaddersEnabled) {
+
+                        if (hit.normal.y < 0f)
+                            allowClimb = false;
+                        else {
+                            
+                            if (ladderAngle <= _surfer.moveData.slopeLimit)
+                                allowClimb = false;
+
+                        }
+
+                    } else if (hit.normal.y != 0f)
+                        allowClimb = false;
+
+                    if (allowClimb) {
+                        foundLadder = true;
+                        if (_surfer.moveData.climbingLadder == false) {
+
+                            _surfer.moveData.climbingLadder = true;
+                            _surfer.moveData.ladderNormal = hit.normal;
+                            _surfer.moveData.ladderDirection = -hit.normal * direction.magnitude * 2f;
+
+                            if (_surfer.moveData.angledLaddersEnabled) {
+
+                                Vector3 sideDir = hit.normal;
+                                sideDir.y = 0f;
+                                sideDir = Quaternion.AngleAxis (-90f, Vector3.up) * sideDir;
+
+                                _surfer.moveData.ladderClimbDir = Quaternion.AngleAxis (90f, sideDir) * hit.normal;
+                                _surfer.moveData.ladderClimbDir *= 1f/ _surfer.moveData.ladderClimbDir.y; // Make sure Y is always 1
+
+                            } else
+                                _surfer.moveData.ladderClimbDir = Vector3.up;
+                            
+                        }
+                        
+                    }
+
+                }
+
+            }
+
+            if (!foundLadder) {
+                
+                _surfer.moveData.ladderNormal = Vector3.zero;
+                _surfer.moveData.ladderVelocity = Vector3.zero;
+                _surfer.moveData.climbingLadder = false;
+                _surfer.moveData.ladderClimbDir = Vector3.up;
+
+            }
+
+        }
+
+        private void LadderPhysics () {
+            
+            _surfer.moveData.ladderVelocity = _surfer.moveData.ladderClimbDir * _surfer.moveData.verticalAxis * 6f;
+
+            _surfer.moveData.velocity = Vector3.Lerp (_surfer.moveData.velocity, _surfer.moveData.ladderVelocity, Time.deltaTime * 10f);
+
+            LadderCheck (Vector3.one, _surfer.moveData.ladderDirection);
+            
+            Trace floorTrace = TraceToFloor ();
+            if (_surfer.moveData.verticalAxis < 0f && floorTrace.hitCollider != null && Vector3.Angle (Vector3.up, floorTrace.planeNormal) <= _surfer.moveData.slopeLimit) {
+
+                _surfer.moveData.velocity = _surfer.moveData.ladderNormal * 0.5f;
+                _surfer.moveData.ladderVelocity = Vector3.zero;
+                _surfer.moveData.climbingLadder = false;
+
+            }
+
+            if (_surfer.moveData.wishJump) {
+
+                _surfer.moveData.velocity = _surfer.moveData.ladderNormal * 4f;
+                _surfer.moveData.ladderVelocity = Vector3.zero;
+                _surfer.moveData.climbingLadder = false;
+                
+            }
+            
+        }
+        
         private void Accelerate (Vector3 wishDir, float wishSpeed, float acceleration, bool yMovement) {
 
             // Initialise variables
